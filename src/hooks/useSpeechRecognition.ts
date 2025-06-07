@@ -38,73 +38,111 @@ export const useSpeechRecognition = () => {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const onSpeechEndRef = useRef<((text: string) => void) | null>(null);
+  const isInitializedRef = useRef(false);
 
   useEffect(() => {
+    if (isInitializedRef.current) return;
+    
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
     if (SpeechRecognition) {
+      console.log('Speech Recognition destekleniyor');
       setIsSupported(true);
-      recognitionRef.current = new SpeechRecognition();
       
-      const recognition = recognitionRef.current;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'tr-TR';
+      try {
+        recognitionRef.current = new SpeechRecognition();
+        const recognition = recognitionRef.current;
+        
+        recognition.continuous = false; // Tek seferde dinle
+        recognition.interimResults = true;
+        recognition.lang = 'tr-TR';
+        recognition.maxAlternatives = 1;
 
-      recognition.onstart = () => {
-        setIsListening(true);
-        setTranscript('');
-        setFinalTranscript('');
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-        // If we have final transcript when recognition ends, trigger callback
-        if (finalTranscript && onSpeechEndRef.current) {
-          onSpeechEndRef.current(finalTranscript);
+        recognition.onstart = () => {
+          console.log('Ses tanıma başladı');
+          setIsListening(true);
+          setTranscript('');
           setFinalTranscript('');
-        }
-      };
+        };
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interimTranscript = '';
-        let currentFinalTranscript = '';
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
-          if (result.isFinal) {
-            currentFinalTranscript += result[0].transcript;
-          } else {
-            interimTranscript += result[0].transcript;
+        recognition.onend = () => {
+          console.log('Ses tanıma bitti');
+          setIsListening(false);
+          
+          // Eğer final transcript varsa callback'i çağır
+          const fullTranscript = finalTranscript.trim();
+          if (fullTranscript && onSpeechEndRef.current) {
+            console.log('Final transcript:', fullTranscript);
+            onSpeechEndRef.current(fullTranscript);
+            setFinalTranscript('');
+            setTranscript('');
           }
-        }
-        
-        // Update transcripts
-        if (currentFinalTranscript) {
-          setFinalTranscript(prev => prev + currentFinalTranscript);
-        }
-        setTranscript(interimTranscript);
+        };
 
-        // Clear existing silence timer
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current);
-        }
-
-        // Set new silence timer - if no speech for 2 seconds, consider speech ended
-        silenceTimerRef.current = setTimeout(() => {
-          if (recognitionRef.current && isListening) {
-            recognition.stop();
+        recognition.onresult = (event: SpeechRecognitionEvent) => {
+          let interimTranscript = '';
+          let currentFinalTranscript = '';
+          
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            const transcriptText = result[0].transcript;
+            
+            if (result.isFinal) {
+              currentFinalTranscript += transcriptText;
+              console.log('Final result:', transcriptText);
+            } else {
+              interimTranscript += transcriptText;
+              console.log('Interim result:', transcriptText);
+            }
           }
-        }, 2000);
-      };
+          
+          if (currentFinalTranscript) {
+            setFinalTranscript(prev => prev + currentFinalTranscript);
+          }
+          setTranscript(interimTranscript);
 
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        console.error('Speech recognition error:', event.error);
-        setIsListening(false);
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current);
-        }
-      };
+          // Silence timer'ı temizle ve yeniden başlat
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+          }
+
+          // 3 saniye sessizlik sonrası durdur
+          silenceTimerRef.current = setTimeout(() => {
+            if (recognitionRef.current && isListening) {
+              console.log('Sessizlik nedeniyle durduruluyor');
+              recognition.stop();
+            }
+          }, 3000);
+        };
+
+        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+          console.error('Speech recognition error:', event.error, event.message);
+          setIsListening(false);
+          
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+          }
+
+          // Bazı hataları yoksay ve tekrar dene
+          if (event.error === 'no-speech' || event.error === 'audio-capture') {
+            console.log('Ses algılanamadı, tekrar deneniyor...');
+            // Kısa bir süre sonra tekrar başlat
+            setTimeout(() => {
+              if (onSpeechEndRef.current) {
+                startListening(onSpeechEndRef.current);
+              }
+            }, 1000);
+          }
+        };
+
+        isInitializedRef.current = true;
+      } catch (error) {
+        console.error('Speech Recognition başlatılamadı:', error);
+        setIsSupported(false);
+      }
+    } else {
+      console.log('Speech Recognition desteklenmiyor');
+      setIsSupported(false);
     }
 
     return () => {
@@ -115,19 +153,35 @@ export const useSpeechRecognition = () => {
         clearTimeout(silenceTimerRef.current);
       }
     };
-  }, [isListening, finalTranscript]);
+  }, []);
 
   const startListening = useCallback((onSpeechEnd?: (text: string) => void) => {
-    if (recognitionRef.current && !isListening) {
+    if (!recognitionRef.current || !isSupported) {
+      console.log('Speech Recognition mevcut değil');
+      return;
+    }
+
+    if (isListening) {
+      console.log('Zaten dinleniyor');
+      return;
+    }
+
+    try {
       onSpeechEndRef.current = onSpeechEnd || null;
       setTranscript('');
       setFinalTranscript('');
+      
+      console.log('Ses tanıma başlatılıyor...');
       recognitionRef.current.start();
+    } catch (error) {
+      console.error('Ses tanıma başlatılamadı:', error);
+      setIsListening(false);
     }
-  }, [isListening]);
+  }, [isListening, isSupported]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current && isListening) {
+      console.log('Ses tanıma durduruluyor...');
       recognitionRef.current.stop();
     }
     if (silenceTimerRef.current) {
