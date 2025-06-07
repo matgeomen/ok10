@@ -17,6 +17,7 @@ function App() {
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const voiceModeActiveRef = useRef(false);
 
   // Speech hooks
   const {
@@ -43,19 +44,24 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
+  // Voice mode ref'i güncelle
+  useEffect(() => {
+    voiceModeActiveRef.current = isVoiceMode;
+  }, [isVoiceMode]);
+
   // Handle voice conversation flow
   const handleVoiceConversation = async (spokenText: string) => {
     if (!spokenText.trim()) {
-      console.log('Boş metin, tekrar dinlemeye başlanıyor...');
-      if (isVoiceMode) {
+      console.log('🔄 Boş metin, tekrar dinlemeye başlanıyor...');
+      if (voiceModeActiveRef.current) {
         setTimeout(() => {
           startListening(handleVoiceConversation);
-        }, 1000);
+        }, 1500);
       }
       return;
     }
 
-    console.log('Sesli mesaj alındı:', spokenText);
+    console.log('🎤 Sesli mesaj alındı:', spokenText);
 
     // Add user message
     const userMessage: ChatMessage = {
@@ -67,7 +73,7 @@ function App() {
 
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
-    stopSpeaking();
+    stopSpeaking(); // Mevcut konuşmayı durdur
 
     try {
       const data = await sendChatMessage(
@@ -92,19 +98,21 @@ function App() {
         setSources([]);
       }
 
-      // Speak the response and then start listening again
-      if (data.textResponse) {
+      // Yanıtı sesli oku ve ardından tekrar dinlemeye başla
+      if (data.textResponse && voiceModeActiveRef.current) {
+        console.log('🔊 Yanıt okunuyor:', data.textResponse.substring(0, 50) + '...');
         speak(data.textResponse, () => {
-          // After speaking is done, start listening again if in voice mode
-          if (isVoiceMode) {
-            console.log('Yanıt okundu, tekrar dinlemeye başlanıyor...');
+          // Konuşma bittikten sonra tekrar dinlemeye başla
+          if (voiceModeActiveRef.current) {
+            console.log('✅ Yanıt okundu, tekrar dinlemeye başlanıyor...');
             setTimeout(() => {
               startListening(handleVoiceConversation);
             }, 1000);
           }
         });
-      } else if (isVoiceMode) {
-        // Eğer yanıt yoksa direkt dinlemeye devam et
+      } else if (voiceModeActiveRef.current) {
+        // Yanıt yoksa direkt dinlemeye devam et
+        console.log('🔄 Yanıt yok, direkt dinlemeye devam ediliyor...');
         setTimeout(() => {
           startListening(handleVoiceConversation);
         }, 1000);
@@ -115,7 +123,7 @@ function App() {
         ? error.message 
         : 'Üzgünüm, bir hata oluştu. Lütfen tekrar deneyin.';
 
-      console.error('Hata:', error instanceof ChatApiError ? error.message : error);
+      console.error('❌ API Hatası:', error instanceof ChatApiError ? error.message : error);
       
       const botMessage: ChatMessage = {
         id: Date.now().toString(),
@@ -125,8 +133,9 @@ function App() {
       };
       setMessages(prev => [...prev, botMessage]);
 
-      // Even on error, continue voice mode if active
-      if (isVoiceMode) {
+      // Hata durumunda da sesli modu devam ettir
+      if (voiceModeActiveRef.current) {
+        console.log('🔄 Hata sonrası tekrar dinlemeye başlanıyor...');
         setTimeout(() => {
           startListening(handleVoiceConversation);
         }, 2000);
@@ -165,10 +174,12 @@ function App() {
   const handleResetChat = async () => {
     if (isLoading) return;
     
+    console.log('🔄 Chat sıfırlanıyor...');
     setMessages([]);
     setSources([]);
     setShowSources(false);
     setIsVoiceMode(false);
+    voiceModeActiveRef.current = false;
     stopSpeaking();
     stopListening();
     
@@ -253,15 +264,20 @@ function App() {
   const handleVoiceToggle = () => {
     if (isVoiceMode) {
       // Stop voice mode
-      console.log('Sesli mod kapatılıyor...');
+      console.log('🛑 Sesli mod kapatılıyor...');
       setIsVoiceMode(false);
+      voiceModeActiveRef.current = false;
       stopListening();
       stopSpeaking();
     } else {
       // Start voice mode
-      console.log('Sesli mod başlatılıyor...');
+      console.log('🚀 Sesli mod başlatılıyor...');
       setIsVoiceMode(true);
-      startListening(handleVoiceConversation);
+      voiceModeActiveRef.current = true;
+      // Kısa bir gecikme ile başlat
+      setTimeout(() => {
+        startListening(handleVoiceConversation);
+      }, 500);
     }
   };
 
@@ -415,20 +431,26 @@ function App() {
 
             {/* Voice Mode Status */}
             {isVoiceMode && (
-              <div className="mt-2 p-2 bg-green-50 rounded-lg border border-green-200">
-                <div className="flex items-center gap-2">
+              <div className="mt-2 p-3 bg-green-50 rounded-lg border border-green-200">
+                <div className="flex items-center gap-2 mb-2">
                   {isListening && (
                     <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                   )}
                   {isSpeaking && (
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                   )}
+                  {isLoading && (
+                    <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                  )}
                   <span className="text-sm text-green-700 font-medium">
-                    {isListening ? '🎤 Dinleniyor...' : isSpeaking ? '🔊 Konuşuyor...' : '⏳ Hazır...'}
+                    {isListening ? '🎤 Dinleniyor... Konuşun!' : 
+                     isSpeaking ? '🔊 Yanıt okunuyor...' : 
+                     isLoading ? '⏳ Yanıt hazırlanıyor...' : 
+                     '✅ Hazır - Konuşmaya başlayın'}
                   </span>
                 </div>
-                <p className="text-xs text-green-600 mt-1">
-                  Sesli konuşma modu aktif. Konuşun, yanıt alın ve otomatik olarak tekrar dinlemeye başlar.
+                <p className="text-xs text-green-600">
+                  🔄 Otomatik döngü: Konuş → Gönder → Yanıt al → Oku → Tekrar dinle
                 </p>
               </div>
             )}
@@ -458,7 +480,13 @@ function App() {
                   <p className="text-xl sm:text-2xl font-medium mb-3">Merhaba! Size nasıl yardımcı olabilirim?</p>
                   <p className="text-gray-500">Herhangi bir sorunuzu yanıtlamaya hazırım.</p>
                   {speechRecognitionSupported && speechSynthesisSupported && (
-                    <p className="text-sm text-blue-600 mt-2">💡 "Sesli Konuşma" butonuna basarak sürekli sesli sohbet edebilirsiniz!</p>
+                    <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                      <p className="text-sm text-blue-700 font-medium">🎤 Sesli Konuşma Özelliği</p>
+                      <p className="text-xs text-blue-600 mt-1">
+                        "Sesli Konuşma" butonuna basarak sürekli sesli sohbet edebilirsiniz!<br/>
+                        Konuş → Otomatik gönder → Yanıt al → Otomatik oku → Tekrar dinle
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>
